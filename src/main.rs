@@ -4,7 +4,6 @@ use process_memory::DataMember;
 use process_memory::Memory;
 use process_memory::Pid;
 use process_memory::TryIntoProcessHandle;
-use rand::thread_rng;
 use std::error::Error;
 use std::mem;
 use sysinfo::System;
@@ -16,7 +15,7 @@ use windows::Win32::{
     },
 };
 
-fn get_elden_ring_base(eldenring: Pid) -> Result<usize, Box<dyn Error>> {
+fn get_elden_ring_base(eldenring: u32) -> Result<usize, Box<dyn Error>> {
     unsafe {
         println!("{}", "[!] Getting handle to Elden Ring".yellow());
         let handle = match OpenProcess(
@@ -28,20 +27,16 @@ fn get_elden_ring_base(eldenring: Pid) -> Result<usize, Box<dyn Error>> {
             Err(_) => panic!("{}", "[x] Couldn't get handle to process.".red()),
         };
         println!("{} {:?}", "[+] Got Handle".green(), handle);
-        println!("{}", "[!] Enumerating process modules of Elden Ring...".yellow());
+        println!(
+            "{}",
+            "[!] Enumerating process modules of Elden Ring...".yellow()
+        );
 
         let mut modules = vec![HMODULE(0); 0]; // less `unsafe { ... }` than mem::zeroed()
         loop {
             let mut lpcbneeded = 0;
             let modules_size = mem::size_of_val(&modules[..]) as u32;
-            match {
-                EnumProcessModules(
-                    handle.clone(),
-                    modules.as_mut_ptr(),
-                    modules_size,
-                    &mut lpcbneeded,
-                )
-            } {
+            match EnumProcessModules(handle, modules.as_mut_ptr(), modules_size, &mut lpcbneeded) {
                 Ok(()) => {}
                 Err(_) => panic!("{}", "[!] Unable to get process module.".red()),
             }
@@ -56,11 +51,7 @@ fn get_elden_ring_base(eldenring: Pid) -> Result<usize, Box<dyn Error>> {
             }
         }
         let base_addr = modules[0].0;
-        println!(
-            "{} {:X}",
-            "[+] Found base address at".green(),
-            base_addr
-        );
+        println!("{} {:X}", "[+] Found base address at".green(), base_addr);
         Ok(base_addr as usize)
     }
 }
@@ -71,7 +62,7 @@ fn get_elden_ring_pid() -> Result<u32, Box<dyn Error>> {
     s.refresh_all();
     let mut er = s.processes_by_exact_name("eldenring.exe").peekable();
     let er_process = er.peek();
-    if let None = er_process {
+    if er_process.is_none() {
         panic!("{}", "[x] Couldn't find Elden Ring. Is it running?".red());
     }
     let pid = er_process.unwrap().pid().as_u32();
@@ -86,22 +77,26 @@ fn patch_runes(runes: u32, base_address: usize, pid: u32) -> Result<(), Box<dyn 
         let offsets: Vec<usize> = vec![0x3CDCDD8, 0x1e508, 0x10, 0x0, 0x580];
         let mut new_addr = base_address as u64;
         for i in 0..offsets.len() {
-           let member = DataMember::new_offset(handle.clone(), vec![new_addr as usize + offsets[i]]);
+            let member = DataMember::new_offset(handle, vec![new_addr as usize + offsets[i]]);
             new_addr = match member.read() {
                 Ok(value) => value,
                 Err(e) => panic!("{}", e),
             };
         }
         new_addr += 0x6c;
-        let runes_addr: DataMember<u32> =
-            DataMember::new_offset(handle.clone(), vec![new_addr as usize]);
-        println!("{}{:X} {} {}", "[+] Found runes at ".green(),new_addr, "with value".green(), runes_addr.read()?);
+        let runes_addr: DataMember<u32> = DataMember::new_offset(handle, vec![new_addr as usize]);
+        println!(
+            "{}{:X} {} {}",
+            "[+] Found runes at ".green(),
+            new_addr,
+            "with value".green(),
+            runes_addr.read()?
+        );
         println!("{} {}", "[+] Patching with value".green(), &runes);
         runes_addr.write(&runes)?;
     }
     Ok(())
 }
-
 
 fn main() -> Result<(), Box<dyn Error>> {
     let app = Command::new("gib runes")
@@ -118,7 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let runes_str = app.get_one::<String>("runes").unwrap();
     let runes: u32 = runes_str.parse()?;
     let pid = get_elden_ring_pid()?;
-    let base_addr = get_elden_ring_base(pid.clone())?;
+    let base_addr = get_elden_ring_base(pid)?;
     patch_runes(runes, base_addr, pid)?;
     Ok(())
 }
